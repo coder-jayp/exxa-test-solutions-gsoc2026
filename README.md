@@ -18,6 +18,9 @@ GSoC 2026 ML4Sci EXXA — Test solutions for Equivariant Vision Networks (EXXA3)
 | Colab Notebook | [Open in Colab](https://colab.research.google.com/drive/1fIppebJ2obFtbncZxd8J6cDr_O4kDLa8?usp=sharing) | [Open in Colab](https://colab.research.google.com/drive/1IwcIekgtpDyxjjDNQKbS8ecmciD_KIaP?usp=sharing) | Coming soon (EXXA4 only) |
 | Google Drive Outputs | [View Outputs](https://drive.google.com/drive/folders/1ck1IyUC4WgEluBtMInOQbNYiq7OI0xFk?usp=sharing) | [View Outputs](https://drive.google.com/drive/folders/13FJm4BekkhtgUcbUh0kejgzCd3XULzLI?usp=sharing) | Coming soon (EXXA4 only) |
 
+## Repository Structure
+
+```
 exxa-test-solutions-gsoc2026/
 ├── EXXA_General_Test.ipynb        # Unsupervised disk morphology clustering
 ├── EXXA_Image_Based_Test.ipynb    # Attention autoencoder for disk reconstruction

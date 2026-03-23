@@ -15,8 +15,9 @@ GSoC 2026 ML4Sci EXXA — Test solutions for Equivariant Vision Networks (EXXA3)
 
 | Resource | General Test | Image-Based Test | Sequential Test |
 |----------|-------------|-----------------|----------------|
-| Colab Notebook | [Open in Colab](https://colab.research.google.com/drive/1fIppebJ2obFtbncZxd8J6cDr_O4kDLa8?usp=sharing) | [Open in Colab](https://colab.research.google.com/drive/1IwcIekgtpDyxjjDNQKbS8ecmciD_KIaP?usp=sharing) | Coming soon (EXXA4 only) |
-| Google Drive Outputs | [View Outputs](https://drive.google.com/drive/folders/1ck1IyUC4WgEluBtMInOQbNYiq7OI0xFk?usp=sharing) | [View Outputs](https://drive.google.com/drive/folders/13FJm4BekkhtgUcbUh0kejgzCd3XULzLI?usp=sharing) | Coming soon (EXXA4 only) |
+| Colab Notebook | [Open in Colab](https://colab.research.google.com/drive/1fIppebJ2obFtbncZxd8J6cDr_O4kDLa8?usp=sharing) | [Open in Colab](https://colab.research.google.com/drive/1IwcIekgtpDyxjjDNQKbS8ecmciD_KIaP?usp=sharing) | [Open in Colab](https://colab.research.google.com/drive/11IPgAqw-Rg9kupgENxbbqsvC9PA19_ps?usp=sharing) |
+| Google Drive Inputs | — | — | [View Inputs](https://drive.google.com/drive/folders/19OQw09IPMpGzO0ny8qVUpAPCDNk7_jJZ?usp=drive_link) |
+| Google Drive Outputs | [View Outputs](https://drive.google.com/drive/folders/1ck1IyUC4WgEluBtMInOQbNYiq7OI0xFk?usp=sharing) | [View Outputs](https://drive.google.com/drive/folders/13FJm4BekkhtgUcbUh0kejgzCd3XULzLI?usp=sharing) | [View Outputs](https://drive.google.com/drive/folders/1iVgNq7yy5pFB1UJAxN49tMmIpl5BJDfJ?usp=drive_link) |
 
 ## Repository Structure
 
@@ -24,7 +25,7 @@ GSoC 2026 ML4Sci EXXA — Test solutions for Equivariant Vision Networks (EXXA3)
 exxa-test-solutions-gsoc2026/
 ├── EXXA_General_Test.ipynb        # Unsupervised disk morphology clustering
 ├── EXXA_Image_Based_Test.ipynb    # Attention autoencoder for disk reconstruction
-├── EXXA_Sequential_Test.ipynb     # EXXA4 only (coming soon)
+├── EXXA_Sequential_Test.ipynb     # Transit light curve binary classifier (EXXA4)
 ├── README.md
 └── LICENSE
 ```
@@ -322,10 +323,154 @@ Per-image MSE and MS-SSIM are computed for all N images and saved to
 
 ---
 
+## Test 3 — Sequential Test: Transit Light Curve Classifier
+
+**Notebook:** `EXXA_Sequential_Test.ipynb`
+
+### Objective
+
+Train a binary classifier to determine whether a given transit light curve shows
+the presence of a planet. A physically realistic synthetic dataset is generated
+using PyTransit with domain randomization matching real Kepler/TESS observation
+conditions, and a 1D ResNet + Squeeze-Excitation attention classifier is trained
+following Shallue & Vanderburg (2018).
+
+### Pipeline Overview
+```
+Synthetic Data Generation → 70/15/15 Split → 1D ResNet + SE Attention → Training → Evaluation → Inference
+  PyTransit + domain rand     stratified        1,003,601 params          OneCycleLR   ROC/AUC      withheld .npz
+```
+
+### Dataset — 40,000 Synthetic Transit Curves
+
+| Parameter | Value |
+|-----------|-------|
+| Planet curves | 20,000 |
+| No-planet curves | 20,000 |
+| Time points per curve | 1,000 |
+| Time window | ±0.25 days centered on transit |
+| Transit model | PyTransit QuadraticModel (Mandel & Agol 2002) |
+| Noise levels | 7 levels σ ∈ [0.0005, 0.01] — full Kepler/TESS SNR range |
+
+**Physical parameters randomized:** Radius ratio k ∈ [0.01, 0.20], limb darkening
+coefficients, transit center t0 ∈ [−0.02, 0.02] days, semi-major axis a ∈ [3, 15]
+stellar radii, inclination i ∈ [83°, 90°], orbital period p ∈ [1, 30] days.
+
+**Noise augmentations:**
+- AR(1) correlated red noise (coefficient 0.3–0.8) — instrumental systematics
+- Baseline drift (50% probability) — telescope thermal/pointing drift
+- Data gaps (30% probability) — Kepler momentum dumps every ~3 days
+- Cosmic ray spikes (30% probability) — CCD detector hits
+- 20% V-shaped eclipsing binary contamination — most common Kepler false positive
+
+**Normalization:** `flux / median(flux) - 1.0` — standard Kepler/TESS pipeline.
+Median is robust to transit dip affecting only 10–20% of points.
+
+### Model Architecture: TransitResNet
+```
+Input (batch, 1, 1000)
+        │
+   Stem: Conv1d(1→16, k=7, stride=2) → BN → ReLU → MaxPool
+        │
+   Layer1: ResBlock(16→32, stride=2) → ResBlock(32→32)
+        │
+   Layer2: ResBlock(32→64, stride=2) → ResBlock(64→64)
+        │
+   Layer3: ResBlock(64→128, stride=2) → ResBlock(128→128)
+        │
+   Layer4: ResBlock(128→256, stride=2) → ResBlock(256→256)
+        │
+   SE Attention: AdaptiveAvgPool → Linear(256→16) → ReLU → Linear(16→256) → Sigmoid
+        │
+   AdaptiveAvgPool1d(1)
+        │
+   Classifier: Flatten → Dropout(0.3) → Linear(256→128) → ReLU → Dropout(0.15) → Linear(128→1)
+        │
+   Output: (batch,) — raw logits
+```
+
+**1,003,601 parameters** · Follows Shallue & Vanderburg (2018) with SE attention added.
+
+### Training Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| Loss | BCEWithLogitsLoss |
+| Optimizer | AdamW (lr=1e-3, weight_decay=1e-4) |
+| Scheduler | OneCycleLR (10% warmup + cosine annealing) |
+| Early stopping | patience=10 epochs |
+| Gradient clipping | max norm 1.0 |
+| Best epoch | 18 |
+| Seed | 42 |
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| Test AUC | **0.9866** |
+| Test Accuracy | **94.17%** |
+| Low noise AUC | 0.9998 |
+| Medium noise AUC | 0.9651 |
+| High noise AUC | 0.9866 |
+| 3-Fold CV AUC | **0.9871 ± 0.0046** |
+
+### Note on Real Data Generalization
+
+The classifier achieves AUC=0.9866 on held-out synthetic data with 7 noise levels
+matching Kepler/TESS SNR ranges. Direct evaluation on a small set of real Kepler
+and TESS phase-folded light curves showed limited generalization, which is expected
+given the synthetic-to-real domain gap and the small size of available labeled real
+data (n=60). Properly phase-folded Kepler confirmed planets (n=8) were correctly
+classified with P>0.75.
+
+### Saved Artifacts
+```
+EXXA_Sequential_Test_Inputs/
+└── exxa_sequential_synthetic_dataset_40k.npz   # Pre-generated 40k dataset
+
+EXXA_Sequential_Test_Outputs/
+├── transit_resnet_best.pth          # Verified pre-trained model checkpoint
+├── inference_predictions.csv        # Per-curve predictions with probabilities
+├── test_metrics.csv                 # Full evaluation metrics
+├── 01_dataset_visualization.png     # Synthetic dataset samples + statistics
+├── 02_training_curves.png           # Loss and accuracy curves
+├── 03_evaluation.png                # ROC curve + confusion matrix + per-noise ROC
+├── 04_attention_visualization.png   # Input gradient saliency maps
+├── 05_cross_validation.png          # 3-fold CV AUC bar chart
+└── inference_results.png            # Sample inference visualizations
+```
+
+### Inference on Withheld Data
+
+Upload your withheld `.npz` file to `MyDrive/EXXA_Sequential_Test_Inputs/`,
+then run the final cell only:
+```python
+WITHHELD_FILE = "your_withheld_file.npz"  # ← change this
+```
+
+**Option A — Run all cells top to bottom (recommended):**
+1. Set `REGENERATE = False` in the generator cell
+2. Run all cells — dataset loads, model trains and saves to Drive, all plots generate
+
+**Option B — Run inference only (minimal cells):**
+1. **Drive mount cell** — mounts Google Drive
+2. **Imports cell** — loads all libraries and sets seeds
+3. **Configuration cell** — defines paths, constants, device
+4. **Generator cell** — defines `normalize_flux`
+5. **Model architecture cell** — defines `TransitResNet`
+6. **Inference pipeline cell** — defines `run_inference`
+7. **Final inference cell** — set `WITHHELD_FILE` and run
+
+**Expected input format:**
+- NumPy `.npz` file with key `'X'` of shape `(N, 1000)`
+- Each row is one light curve with 1000 time points
+- Both raw flux (median near 1.0) and pre-normalized flux (median near 0.0) are handled automatically
+
+---
+
 ## Reproducibility
 
-Both notebooks run end-to-end with `seed=42`.
-
+All three notebooks run end-to-end with `seed=42`.
 ```python
 np.random.seed(42)
 torch.manual_seed(42)
@@ -340,19 +485,25 @@ no retraining and no access to training data required.
 includes model weights, optimizer state, epoch number, best loss, and full
 training history. Inference requires only the `.pth` file.
 
+**Sequential Test:** Pre-generated dataset and pre-trained checkpoint saved to
+Google Drive. Set `REGENERATE = False` to skip dataset generation. Inference
+runs on withheld `.npz` files with a single path change.
+
 ---
 
 ## Installation
-
 ```bash
 # General Test
 pip install astropy umap-learn opencv-python-headless joblib scikit-learn scipy
 
 # Image-Based Test
 pip install astropy pytorch-msssim torch torchvision
+
+# Sequential Test
+pip install pytransit lightkurve astropy numpy pandas scikit-learn matplotlib seaborn torch
 ```
 
-Both notebooks install dependencies automatically in the first cell when
+All notebooks install dependencies automatically in the first cell when
 running on Google Colab.
 
 ---
